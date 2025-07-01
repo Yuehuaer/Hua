@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+  video-downloader-bot:
+    build: .
+    container_name: video-downloader-bot
+    restart: unless-stopped
+    volumes:
+      - ./downloads:/downloads
+      - ./cookies:/cookies
+    environment:
+      - TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+      - DOWNLOAD_PATH=/downloads
+      - CONVERT_TO_MP4=true
+      # 可选配置
+      # - PROXY_HOST=http://your-proxy-server:port
+      # - X_COOKIES=/cookies/x_cookies.txt
+      # - B_COOKIES=/cookies/bilibili_cookies.txt
+      # - CUSTOM_DOWNLOAD_PATH=false
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
