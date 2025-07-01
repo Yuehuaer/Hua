@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制代码
-COPY video_downloader_bot.py /app/
+# 复制 Yunx 代码
+COPY video_downloader_bot.py /app/yunx_bot.py
 
 # 安装 Python 依赖
 RUN pip install --no-cache-dir python-telegram-bot yt-dlp requests ffmpeg-python
@@ -21,5 +21,5 @@ RUN mkdir -p /downloads/x /downloads/youtube /downloads/xvideos /downloads/pornh
 ENV DOWNLOAD_PATH=/downloads
 ENV CONVERT_TO_MP4=true
 
-# 运行机器人
-CMD ["python", "video_downloader_bot.py"]
+# 运行 Yunx 机器人
+CMD ["python", "yunx_bot.py"]

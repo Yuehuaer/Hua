@@ -1,6 +1,6 @@
-# 多功能下载 Telegram 机器人
+# Yunx - 多功能下载 Telegram 机器人
 
-这是一个功能强大的 Telegram 机器人，支持多种下载功能：
+Yunx 是一个功能强大的 Telegram 机器人，支持多种下载功能：
 
 1. **视频下载**：从多个平台下载视频，包括 X (Twitter)、YouTube、Bilibili、抖音、Xvideos 和 Pornhub
 2. **文件和图片下载**：直接从 Telegram 下载用户发送的文件和图片

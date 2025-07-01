@@ -1,9 +1,9 @@
 version: '3'
 
 services:
-  video-downloader-bot:
+  yunx-bot:
     build: .
-    container_name: video-downloader-bot
+    container_name: yunx-bot
     restart: unless-stopped
     volumes:
       - ./downloads:/downloads
