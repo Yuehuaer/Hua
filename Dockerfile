@@ -15,7 +15,7 @@ COPY video_downloader_bot.py /app/
 RUN pip install --no-cache-dir python-telegram-bot yt-dlp requests ffmpeg-python
 
 # 创建下载目录
-RUN mkdir -p /downloads/x /downloads/youtube /downloads/xvideos /downloads/pornhub /downloads/bilibili /downloads/douyin
+RUN mkdir -p /downloads/x /downloads/youtube /downloads/xvideos /downloads/pornhub /downloads/bilibili /downloads/douyin /downloads/files /downloads/images
 
 # 设置环境变量
 ENV DOWNLOAD_PATH=/downloads

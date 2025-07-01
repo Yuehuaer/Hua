@@ -6,14 +6,16 @@ import sys
 import asyncio
 import logging
 from pathlib import Path
-from urllib.parse import urlparse
-from typing import Optional, Dict, Any
+from urllib.parse import urlparse, quote
+from typing import Optional, Dict, Any, List, Union
 import time
 import threading
 import requests
 import urllib3
 import re
 import uuid
+import json
+from datetime import datetime
 
 # 禁用 SSL 警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -33,6 +35,113 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+class QBittorrentClient:
+    """qBittorrent Web API 客户端"""
+    def __init__(self, host: str, username: str = None, password: str = None, download_path: str = None):
+        self.host = host.rstrip('/')
+        self.username = username
+        self.password = password
+        self.download_path = download_path
+        self.session = requests.Session()
+        self.is_logged_in = False
+        
+    def login(self) -> bool:
+        """登录到qBittorrent Web API"""
+        try:
+            if not self.username or not self.password:
+                logger.warning("未提供qBittorrent用户名或密码，尝试无认证连接")
+                self.is_logged_in = True
+                return True
+                
+            login_url = f"{self.host}/api/v2/auth/login"
+            data = {
+                'username': self.username,
+                'password': self.password
+            }
+            response = self.session.post(login_url, data=data, verify=False, timeout=10)
+            
+            if response.text == "Ok.":
+                logger.info("qBittorrent登录成功")
+                self.is_logged_in = True
+                return True
+            else:
+                logger.error(f"qBittorrent登录失败: {response.text}")
+                return False
+        except Exception as e:
+            logger.error(f"qBittorrent登录异常: {str(e)}")
+            return False
+    
+    def add_torrent(self, torrent_url: str, category: str = None) -> Dict[str, Any]:
+        """添加种子到qBittorrent"""
+        try:
+            if not self.is_logged_in and not self.login():
+                return {'success': False, 'error': '无法登录到qBittorrent'}
+            
+            add_url = f"{self.host}/api/v2/torrents/add"
+            
+            data = {}
+            
+            # 检查是否为磁力链接
+            if torrent_url.startswith('magnet:'):
+                data['urls'] = torrent_url
+            else:
+                # 尝试下载种子文件
+                try:
+                    torrent_response = requests.get(torrent_url, verify=False, timeout=30)
+                    if torrent_response.status_code != 200:
+                        return {'success': False, 'error': f'无法下载种子文件: HTTP {torrent_response.status_code}'}
+                    
+                    files = {'torrents': ('temp.torrent', torrent_response.content)}
+                except Exception as e:
+                    return {'success': False, 'error': f'下载种子文件失败: {str(e)}'}
+            
+            # 设置下载路径
+            if self.download_path:
+                data['savepath'] = self.download_path
+            
+            # 设置分类
+            if category:
+                data['category'] = category
+            
+            # 添加种子
+            if torrent_url.startswith('magnet:'):
+                response = self.session.post(add_url, data=data, verify=False, timeout=30)
+            else:
+                response = self.session.post(add_url, data=data, files=files, verify=False, timeout=30)
+            
+            if response.status_code == 200:
+                logger.info(f"种子添加成功: {torrent_url}")
+                return {'success': True, 'message': '种子已添加到qBittorrent'}
+            else:
+                logger.error(f"种子添加失败: {response.text}")
+                return {'success': False, 'error': f'种子添加失败: {response.text}'}
+        except Exception as e:
+            logger.error(f"添加种子异常: {str(e)}")
+            return {'success': False, 'error': str(e)}
+    
+    def get_torrents(self, filter: str = 'all', category: str = None) -> List[Dict[str, Any]]:
+        """获取种子列表"""
+        try:
+            if not self.is_logged_in and not self.login():
+                return []
+            
+            list_url = f"{self.host}/api/v2/torrents/info"
+            params = {'filter': filter}
+            
+            if category:
+                params['category'] = category
+            
+            response = self.session.get(list_url, params=params, verify=False, timeout=10)
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"获取种子列表失败: {response.text}")
+                return []
+        except Exception as e:
+            logger.error(f"获取种子列表异常: {str(e)}")
+            return []
 
 class VideoDownloader:
     def __init__(self, base_download_path: str, x_cookies_path: str = None):
@@ -101,12 +210,22 @@ class VideoDownloader:
         self.bilibili_download_path.mkdir(parents=True, exist_ok=True)
         self.douyin_download_path.mkdir(parents=True, exist_ok=True)
         
+        # 创建文件下载目录
+        self.files_download_path = self.base_download_path / "files"
+        self.files_download_path.mkdir(parents=True, exist_ok=True)
+        
+        # 创建图片下载目录
+        self.images_download_path = self.base_download_path / "images"
+        self.images_download_path.mkdir(parents=True, exist_ok=True)
+        
         logger.info(f"X 下载路径: {self.x_download_path}")
         logger.info(f"YouTube 下载路径: {self.youtube_download_path}")
         logger.info(f"Xvideos 下载路径: {self.xvideos_download_path}")
         logger.info(f"Pornhub 下载路径: {self.pornhub_download_path}")
         logger.info(f"Bilibili 下载路径: {self.bilibili_download_path}")
         logger.info(f"抖音下载路径: {self.douyin_download_path}")
+        logger.info(f"文件下载路径: {self.files_download_path}")
+        logger.info(f"图片下载路径: {self.images_download_path}")
         
         # 如果设置了 Bilibili cookies，记录日志
         if self.b_cookies_path:
@@ -609,19 +728,117 @@ class VideoDownloader:
         except Exception as e:
             logger.error(f"下载失败: {str(e)}")
             return {'success': False, 'error': str(e)}
+            
+    async def download_file(self, file_url: str, file_name: str = None, is_image: bool = False) -> Dict[str, Any]:
+        """下载文件或图片"""
+        try:
+            # 确定下载路径
+            download_path = self.images_download_path if is_image else self.files_download_path
+            
+            # 如果没有提供文件名，从URL中提取
+            if not file_name:
+                parsed_url = urlparse(file_url)
+                file_name = os.path.basename(parsed_url.path)
+                
+                # 如果文件名为空或无效，使用时间戳
+                if not file_name or file_name == '':
+                    timestamp = int(time.time())
+                    extension = '.jpg' if is_image else '.bin'
+                    file_name = f"{timestamp}{extension}"
+            
+            # 确保文件名是唯一的
+            timestamp = int(time.time())
+            base_name, extension = os.path.splitext(file_name)
+            if not extension:
+                extension = '.jpg' if is_image else '.bin'
+            
+            unique_file_name = f"{timestamp}_{base_name}{extension}"
+            file_path = download_path / unique_file_name
+            
+            # 下载文件
+            loop = asyncio.get_running_loop()
+            
+            def download():
+                try:
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                    
+                    # 设置代理（如果有）
+                    proxies = None
+                    if self.proxy_host:
+                        proxies = {
+                            'http': self.proxy_host,
+                            'https': self.proxy_host
+                        }
+                    
+                    # 下载文件
+                    with requests.get(file_url, headers=headers, proxies=proxies, stream=True, verify=False, timeout=60) as response:
+                        response.raise_for_status()
+                        
+                        # 获取文件大小
+                        total_size = int(response.headers.get('content-length', 0))
+                        
+                        # 写入文件
+                        with open(file_path, 'wb') as f:
+                            downloaded_size = 0
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                                    downloaded_size += len(chunk)
+                    
+                    # 获取文件大小
+                    file_size = os.path.getsize(file_path)
+                    file_size_mb = file_size / (1024 * 1024)
+                    
+                    return {
+                        'success': True,
+                        'file_path': str(file_path),
+                        'file_name': unique_file_name,
+                        'original_name': file_name,
+                        'size_mb': round(file_size_mb, 2),
+                        'is_image': is_image
+                    }
+                except Exception as e:
+                    logger.error(f"文件下载失败: {str(e)}")
+                    # 如果文件已经创建，删除它
+                    if file_path.exists():
+                        try:
+                            file_path.unlink()
+                        except:
+                            pass
+                    return {'success': False, 'error': str(e)}
+            
+            # 执行下载
+            result = await loop.run_in_executor(None, download)
+            return result
+            
+        except Exception as e:
+            logger.error(f"文件下载处理失败: {str(e)}")
+            return {'success': False, 'error': str(e)}
 
 class TelegramBot:
-    def __init__(self, token: str, downloader: VideoDownloader):
+    def __init__(self, token: str, downloader: VideoDownloader, qbittorrent_client: QBittorrentClient = None):
         self.downloader = downloader
+        self.qbittorrent_client = qbittorrent_client
+        
         if self.downloader.proxy_host:
             logger.info(f"Telegram Bot 使用代理: {self.downloader.proxy_host}")
             self.application = Application.builder().token(token).proxy(self.downloader.proxy_host).build()
         else:
             logger.info("Telegram Bot 直接连接")
             self.application = Application.builder().token(token).build()
+            
         self.active_downloads = {}  # task_id: True
         self.progress_data = {}     # task_id: progress_data dict
         self.progress_message = {}  # task_id: telegram message object
+        
+        # 种子下载相关
+        self.torrent_enabled = self.qbittorrent_client is not None
+        if self.torrent_enabled:
+            logger.info(f"种子下载功能已启用，qBittorrent服务器: {self.qbittorrent_client.host}")
+        else:
+            logger.info("种子下载功能未启用")
         
     async def version_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /version 命令 - 显示版本信息"""
@@ -714,8 +931,15 @@ Python: {sys.version.split()[0]}
 • Xvideos
 • Pornhub
 
+支持的功能：
+• 视频下载 - 发送视频链接
+• 文件/图片下载 - 直接发送文件或图片
+• 种子下载 - 发送磁力链接或种子链接
+
 使用方法：
-直接发送视频链接即可开始下载
+• 视频下载：直接发送视频链接
+• 文件/图片下载：直接发送文件或图片
+• 种子下载：发送磁力链接或种子URL
 
 命令：
 • /start - 显示此帮助信息
@@ -794,11 +1018,30 @@ YouTube 视频: {len(youtube_files)} 个文件
     
     async def handle_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         url = update.message.text.strip()
+        
+        # 检查是否为磁力链接
+        if url.startswith('magnet:'):
+            if self.torrent_enabled:
+                await self.handle_torrent(update, url)
+            else:
+                await update.message.reply_text("种子下载功能未启用")
+            return
+            
+        # 检查是否为种子链接
+        if url.lower().endswith('.torrent') or 'torrent' in url.lower():
+            if self.torrent_enabled:
+                await self.handle_torrent(update, url)
+            else:
+                await update.message.reply_text("种子下载功能未启用")
+            return
+        
+        # 处理普通URL
         if not url.startswith(('http://', 'https://')):
             url = self.downloader.extract_douyin_url(url)
             if not url:
-                await update.message.reply_text("请发送有效的视频链接")
+                await update.message.reply_text("请发送有效的视频链接、磁力链接或种子链接")
                 return
+                
         if not (self.downloader.is_x_url(url) or 
                 self.downloader.is_youtube_url(url) or
                 self.downloader.is_xvideos_url(url) or 
@@ -927,6 +1170,154 @@ YouTube 视频: {len(youtube_files)} 个文件
         bar = '█' * filled_length + '░' * (length - filled_length)
         return bar
     
+    async def handle_torrent(self, update: Update, torrent_url: str):
+        """处理种子链接"""
+        if not self.torrent_enabled:
+            await update.message.reply_text("种子下载功能未启用")
+            return
+            
+        status_message = await update.message.reply_text("正在添加种子到下载队列...")
+        
+        try:
+            # 添加种子到qBittorrent
+            result = self.qbittorrent_client.add_torrent(torrent_url)
+            
+            if result['success']:
+                # 获取种子列表，查找刚添加的种子
+                torrents = self.qbittorrent_client.get_torrents()
+                
+                if torrents:
+                    # 尝试找到刚添加的种子（通常是最新的）
+                    newest_torrent = None
+                    for torrent in torrents:
+                        if newest_torrent is None or torrent.get('added_on', 0) > newest_torrent.get('added_on', 0):
+                            newest_torrent = torrent
+                    
+                    if newest_torrent:
+                        name = newest_torrent.get('name', '未知')
+                        size = newest_torrent.get('size', 0) / (1024 * 1024)  # 转换为MB
+                        progress = newest_torrent.get('progress', 0) * 100
+                        
+                        success_text = f"""种子已添加到下载队列!
+
+📝 名称: {name}
+💾 大小: {size:.2f}MB
+📊 进度: {progress:.1f}%
+📂 保存位置: {self.qbittorrent_client.download_path or '默认路径'}
+
+种子已开始下载，可以在qBittorrent中查看详细进度。"""
+                    else:
+                        success_text = f"""种子已添加到下载队列!
+
+📂 保存位置: {self.qbittorrent_client.download_path or '默认路径'}
+
+种子已开始下载，可以在qBittorrent中查看详细进度。"""
+                else:
+                    success_text = "种子已添加到下载队列!"
+                
+                await status_message.edit_text(success_text)
+            else:
+                await status_message.edit_text(f"添加种子失败: {result.get('error', '未知错误')}")
+                
+        except Exception as e:
+            logger.error(f"处理种子链接失败: {str(e)}")
+            await status_message.edit_text(f"处理种子链接失败: {str(e)}")
+    
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理文件"""
+        document = update.message.document
+        if not document:
+            await update.message.reply_text("无法处理此文件")
+            return
+            
+        # 检查是否为种子文件
+        if document.file_name and document.file_name.lower().endswith('.torrent'):
+            if self.torrent_enabled:
+                status_message = await update.message.reply_text("正在处理种子文件...")
+                
+                try:
+                    # 获取文件URL
+                    file = await context.bot.get_file(document.file_id)
+                    file_url = file.file_path
+                    
+                    # 添加种子到qBittorrent
+                    result = self.qbittorrent_client.add_torrent(file_url)
+                    
+                    if result['success']:
+                        await status_message.edit_text(f"""种子文件已添加到下载队列!
+
+📝 文件名: {document.file_name}
+📂 保存位置: {self.qbittorrent_client.download_path or '默认路径'}
+
+种子已开始下载，可以在qBittorrent中查看详细进度。""")
+                    else:
+                        await status_message.edit_text(f"添加种子失败: {result.get('error', '未知错误')}")
+                        
+                except Exception as e:
+                    logger.error(f"处理种子文件失败: {str(e)}")
+                    await status_message.edit_text(f"处理种子文件失败: {str(e)}")
+            else:
+                await update.message.reply_text("种子下载功能未启用")
+            return
+            
+        # 处理普通文件
+        status_message = await update.message.reply_text("正在下载文件...")
+        
+        try:
+            # 获取文件URL
+            file = await context.bot.get_file(document.file_id)
+            file_url = file.file_path
+            
+            # 下载文件
+            result = await self.downloader.download_file(file_url, document.file_name)
+            
+            if result['success']:
+                await status_message.edit_text(f"""文件下载完成!
+
+📝 文件名: {result['original_name']}
+💾 大小: {result['size_mb']}MB
+📂 保存位置: files 文件夹""")
+            else:
+                await status_message.edit_text(f"文件下载失败: {result.get('error', '未知错误')}")
+                
+        except Exception as e:
+            logger.error(f"处理文件失败: {str(e)}")
+            await status_message.edit_text(f"处理文件失败: {str(e)}")
+    
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理图片"""
+        photo = update.message.photo[-1]  # 获取最大尺寸的图片
+        if not photo:
+            await update.message.reply_text("无法处理此图片")
+            return
+            
+        status_message = await update.message.reply_text("正在下载图片...")
+        
+        try:
+            # 获取图片URL
+            file = await context.bot.get_file(photo.file_id)
+            file_url = file.file_path
+            
+            # 生成文件名
+            timestamp = int(time.time())
+            file_name = f"photo_{timestamp}.jpg"
+            
+            # 下载图片
+            result = await self.downloader.download_file(file_url, file_name, is_image=True)
+            
+            if result['success']:
+                await status_message.edit_text(f"""图片下载完成!
+
+📝 文件名: {result['file_name']}
+💾 大小: {result['size_mb']}MB
+📂 保存位置: images 文件夹""")
+            else:
+                await status_message.edit_text(f"图片下载失败: {result.get('error', '未知错误')}")
+                
+        except Exception as e:
+            logger.error(f"处理图片失败: {str(e)}")
+            await status_message.edit_text(f"处理图片失败: {str(e)}")
+    
     def run(self):
         """启动机器人"""
         logger.info("Telegram 视频下载机器人启动中...")
@@ -937,6 +1328,8 @@ YouTube 视频: {len(youtube_files)} 个文件
         self.application.add_handler(CommandHandler("cleanup", self.cleanup_command))
         self.application.add_handler(CommandHandler("formats", self.formats_command))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_url))
+        self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
+        self.application.add_handler(MessageHandler(filters.Document.ALL, self.handle_document))
         
         logger.info("程序已经正常启动")
         
@@ -958,9 +1351,33 @@ def main():
     if x_cookies_path:
         logger.info(f"X Cookies 路径: {x_cookies_path}")
     
-    # 创建下载器和机器人
+    # 创建下载器
     downloader = VideoDownloader(download_path, x_cookies_path)
-    bot = TelegramBot(bot_token, downloader)
+    
+    # 检查是否启用qBittorrent
+    qbittorrent_host = os.getenv('QBITTORRENT_HOST')
+    qbittorrent_username = os.getenv('QBITTORRENT_USERNAME')
+    qbittorrent_password = os.getenv('QBITTORRENT_PASSWORD')
+    qbittorrent_download_path = os.getenv('QBITTORRENT_DOWNLOAD_PATH')
+    
+    qbittorrent_client = None
+    if qbittorrent_host:
+        logger.info(f"qBittorrent 服务器: {qbittorrent_host}")
+        qbittorrent_client = QBittorrentClient(
+            qbittorrent_host,
+            qbittorrent_username,
+            qbittorrent_password,
+            qbittorrent_download_path
+        )
+        # 测试连接
+        if qbittorrent_client.login():
+            logger.info("qBittorrent 连接成功")
+        else:
+            logger.warning("qBittorrent 连接失败，种子下载功能将被禁用")
+            qbittorrent_client = None
+    
+    # 创建机器人
+    bot = TelegramBot(bot_token, downloader, qbittorrent_client)
     
     # 启动机器人
     try:

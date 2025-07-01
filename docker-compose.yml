@@ -17,6 +17,11 @@ services:
       # - X_COOKIES=/cookies/x_cookies.txt
       # - B_COOKIES=/cookies/bilibili_cookies.txt
       # - CUSTOM_DOWNLOAD_PATH=false
+      # qBittorrent 配置
+      # - QBITTORRENT_HOST=http://qbittorrent:8080
+      # - QBITTORRENT_USERNAME=admin
+      # - QBITTORRENT_PASSWORD=adminadmin
+      # - QBITTORRENT_DOWNLOAD_PATH=/downloads/torrents
     networks:
       - bot-network
 
